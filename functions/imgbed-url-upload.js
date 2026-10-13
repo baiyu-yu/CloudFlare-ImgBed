@@ -43,61 +43,48 @@ async function handleUpload(request, env) {
 }
 
 async function processUpload(params, env, request) {
-    // ── 解析 image_url ───────────────────────────────────────────────
     const imageUrl = params.get("image_url") || params.get("image") || "";
-    if (!imageUrl) {
-        return json({ error: "缺少 image_url 参数" }, 400);
-    }
+    if (!imageUrl) return json({ error: "缺少 image_url 参数" }, 400);
 
     let parsedUrl;
-    try {
-        parsedUrl = new URL(imageUrl);
-    } catch {
-        return json({ error: "image_url 格式不合法" }, 400);
-    }
-    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-        return json({ error: "仅支持 http/https" }, 400);
-    }
+    try { parsedUrl = new URL(imageUrl); } catch { return json({ error: "image_url 格式不合法" }, 400); }
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) return json({ error: "仅支持 http/https" }, 400);
 
-    // ── 拉取图片 ─────────────────────────────────────────────────────
     let imageResp;
     try {
-        imageResp = await fetch(imageUrl, {
-            headers: { "User-Agent": "CF-ImgBed-UrlUpload/1.0" },
-            redirect: "follow",
-        });
-    } catch (e) {
-        return json({ error: "拉取图片失败: " + String(e) }, 502);
-    }
-    if (!imageResp.ok) {
-        return json({ error: `来源服务器返回 ${imageResp.status}` }, 502);
-    }
+        imageResp = await fetch(imageUrl, { headers: { "User-Agent": "CF-ImgBed-UrlUpload/1.0" }, redirect: "follow" });
+    } catch (e) { return json({ error: "拉取图片失败: " + String(e) }, 502); }
+    if (!imageResp.ok) return json({ error: `来源服务器返回 ${imageResp.status}` }, 502);
 
-    // ── 推断格式 ─────────────────────────────────────────────────────
     const srcCt = imageResp.headers.get("content-type") || "image/jpeg";
     const ext = mimeToExt(srcCt) || extFromUrl(imageUrl) || "jpg";
     const timestamp = Date.now();
     const rand = Math.random().toString(36).slice(2, 8);
     const filename = `url-upload/${timestamp}_${rand}.${ext}`;
 
-    // ── 存入 R2 ──────────────────────────────────────────────────────
-    // cf-imgbed 绑定变量名为 img
     const bucket = env.img_r2 || env.img || env.BUCKET;
-    if (!bucket) {
-        return json({ error: "R2 存储桶未绑定，请检查 Cloudflare Pages 绑定配置" }, 500);
-    }
+    if (!bucket) return json({ error: "R2 存储桶未绑定" }, 500);
 
     const imageBuffer = await imageResp.arrayBuffer();
-    await bucket.put(filename, imageBuffer, {
-        httpMetadata: { contentType: srcCt },
-    });
+    await bucket.put(filename, imageBuffer, { httpMetadata: { contentType: srcCt } });
 
-    // ── 拼返回 URL ───────────────────────────────────────────────────
+    // 写 KV 记录，让 /file/ 路由能找到这个文件
+    const kv = env.img_url;
+    if (kv) {
+        const metadata = {
+            TimeStamp: timestamp,
+            FileName: filename,
+            FileSize: imageBuffer.byteLength,
+            Channel: "r2",
+            StorageStatus: "存储成功",
+        };
+        await kv.put(filename, "", { metadata });
+    }
+
     const host = new URL(request.url).origin;
-    const resultUrl = `${host}/file/${filename}`;
-
-    return json({ url: resultUrl, filename });
+    return json({ url: `${host}/file/${filename}`, filename });
 }
+
 
 // ── 工具函数 ─────────────────────────────────────────────────────────
 
