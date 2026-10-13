@@ -82,7 +82,7 @@ async function processUpload(params, env, request) {
 
     // ── 存入 R2 ──────────────────────────────────────────────────────
     // cf-imgbed 绑定变量名为 img
-    const bucket = env.img || env.BUCKET;
+    const bucket = env.img_r2 || env.img || env.BUCKET;
     if (!bucket) {
         return json({ error: "R2 存储桶未绑定，请检查 Cloudflare Pages 绑定配置" }, 500);
     }
